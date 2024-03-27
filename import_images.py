@@ -1,6 +1,6 @@
 import sys, os
 
-# Umożliwia dodanie images do pliku exe
+# Fix to images
 def resource_path(relative_path):
     base_path = getattr(
         sys,
