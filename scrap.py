@@ -21,6 +21,10 @@ def chapter_scraper():
     page_name = []
     manga_date = []
     day_dif = []
+    update_time = []
+
+    link_count = 0
+    scraped_count = 0
 
     for link in result_tuple:
         # Format and change data without brackets and commas that I got from mysql database
@@ -36,36 +40,42 @@ def chapter_scraper():
         simple_date_month = ()
         simple_date_year = ()
 
-        for title_name in soup.find_all(attrs='story-info-right'):
-            title = title_name.find('h1').text
-            manga_title.append(title)
+        link_count += 1
 
-            # Link added only when website exist, sometimes they change url so there will be more urls in database than actual list
-            # need to add here, if link don't find title then delete link from database, would be great to inform user about this also
-            manga_link.append(link)
+        title_elements = soup.find_all(attrs='story-info-right')
+        if title_elements:
+            for title_name in soup.find_all(attrs='story-info-right'):
+                title = title_name.find('h1').text
+                manga_title.append(title)
 
-            folder_path = r'static'
+                scraped_count += 1
 
-            cover_name = f'{title}.png'
+                manga_link.append(link)
+                folder_path = r'static'
+                if not os.path.exists(folder_path):
+                    os.makedirs(folder_path)
 
-            img_name = os.path.join(folder_path, cover_name)
-
-            if not os.path.exists(img_name):
-                # Cover scraper, add title_name as image name
-                web_chapters = requests.get(link).text
-                soup = BeautifulSoup(web_chapters, 'html.parser')
-
-                span_tag = soup.find('span', class_='info-image')
-                img_tag = span_tag.find('img')
-
-                # Get the 'src' attribute from the 'img' tag
-                img_url = urljoin(link, img_tag['src'])
-
+                cover_name = f'{title}.png'
                 img_name = os.path.join(folder_path, cover_name)
 
-                img_data = requests.get(img_url).content
-                with open(img_name, 'wb') as f:
-                    f.write(img_data)
+                if not os.path.exists(img_name):
+                    # Cover scraper, add title_name as image name
+                    web_chapters = requests.get(link).text
+                    soup = BeautifulSoup(web_chapters, 'html.parser')
+
+                    span_tag = soup.find('span', class_='info-image')
+                    img_tag = span_tag.find('img')
+
+                    # Get the 'src' attribute from the 'img' tag
+                    img_url = urljoin(link, img_tag['src'])
+
+                    img_name = os.path.join(folder_path, cover_name)
+
+                    img_data = requests.get(img_url).content
+                    with open(img_name, 'wb') as f:
+                        f.write(img_data)
+        else:
+            print(f'Page not found {link}')
 
         for element in soup.find_all(attrs='row-content-chapter'):
             name = element.find('a').text
@@ -93,14 +103,21 @@ def chapter_scraper():
                 day_dif.append(days_ago)
 
             else:
-                simple_date_day = simple_date_day[0].replace(r',', '')
-                simple_date_year = simple_date_year[0].replace(r',', '20')
+                try:
+                    simple_date_day = simple_date_day[0].replace(r',', '')
+                    simple_date_year = simple_date_year[0].replace(r',', '20')
 
-                # When was the last chapter
-                today = datetime.date.today()
-                chapter_day = datetime.date(int(simple_date_year), int(simple_date_month), int(simple_date_day))
-                diff = today - chapter_day
-                day_dif.append(diff.days)
+                    # When was the last chapter
+                    today = datetime.date.today()
+                    chapter_day = datetime.date(int(simple_date_year), int(simple_date_month), int(simple_date_day))
+                    diff = today - chapter_day
+                    day_dif.append(diff.days)
+                except IndexError:
+                    day_dif.append(None)
+
+        for updated_date in soup.find_all(attrs='story-info-right-extent'):
+            update = updated_date.find(class_ = 'stre-value').text
+            update_time.append(update)
 
     df['Title'] = manga_title
     df['Web_link'] = manga_link
@@ -111,6 +128,8 @@ def chapter_scraper():
     today = datetime.date.today()
     df['Current Time'] = today
 
+    df['Updated'] = update_time
+
     old_chapter_list = "SELECT * FROM chapter_list"
 
     df_old = pd.read_sql(old_chapter_list, engine)
@@ -118,37 +137,9 @@ def chapter_scraper():
 
     # Detect new chapters and add to new df
     try:
-        for new, old, link, title, new_time, old_time in zip(df['Upload Date'], df_old['Upload Date'], df['Web_link'], df['Title'], df['Current Time'], df_old['Current Time']):
-            if new == old:
+        for new, old, link, title, new_time, old_time in zip(df['Upload Date'], df_old['Upload Date'], df['Web_link'], df['Title'], df['Updated'], df_old['Updated']):
+            if new_time == old_time:
                 pass
-            elif 'hour' in old:
-                if 'hour' in new:
-                    hours = r'[0-9]+'
-                    new_re = re.findall(hours, new)
-                    old_re = re.findall(hours, old)
-                    if int(new_re[0]) >= int(old_re[0]):
-                        pass
-                    else:
-                        df_detected.loc[len(df_detected)] = df[df['Title'] == title].iloc[0]
-                        print(f'New chapter detected for {title}. Go to {link}')
-                elif 'day' in new:
-                    if new_time == old_time:
-                        pass
-                    else:
-                        df_detected.loc[len(df_detected)] = df[df['Title'] == title].iloc[0]
-                        print(f'New chapter detected for {title}. Go to {link}')
-            elif 'day' in old:
-                days = r'[0-9]+'
-                new_re = re.findall(days, new)
-                old_re = re.findall(days, old)
-                if int(new_re[0]) >= int(old_re[0]):
-                    pass
-                else:
-                    if new_time == old_time:
-                        pass
-                    else:
-                        df_detected.loc[len(df_detected)] = df[df['Title'] == title].iloc[0]
-                        print(f'New chapter detected for {title}. Go to {link}')
             else:
                 df_detected.loc[len(df_detected)] = df[df['Title'] == title].iloc[0]
                 print(f'New chapter detected for {title}. Go to {link}')
@@ -160,3 +151,5 @@ def chapter_scraper():
 
     df.to_sql(name="chapter_list", con=engine, if_exists='replace', index=False)
 
+    print(f"{link_count} Links")
+    print(f"{scraped_count} Find")

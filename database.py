@@ -28,4 +28,3 @@ def add_new_link_to_database(link):
   result = cursor.fetchall()
 
   mydb.commit()
-

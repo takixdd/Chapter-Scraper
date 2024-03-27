@@ -4,21 +4,30 @@ from scrap import chapter_scraper
 from database import add_new_link_to_database
 from db_login import cursor
 from db_login import row_count
+from db_login import engine
 from title_scrap import title_scrapped
 from PIL import Image, ImageTk
 from tkinter import ttk
 import pandas as pd
-from db_login import engine
 import webbrowser
 import os
+from scrap_latest_chapter_v2 import scrap_latest
+from scrap_all_chapters import scrap_all
+from all_chapters_window import read_all_chapters
+import threading
+import psutil
 
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("blue")
 
 appWidth, appHeight = 800, 700
-iconpath = resource_path(r'logo\animu.ico')
-img = customtkinter.CTkImage(light_image=Image.open(r"static\star.png"), size=(20, 20))
+try:
+    iconpath = resource_path(r'logo\animu.ico')
+    img = customtkinter.CTkImage(light_image=Image.open(r"static\star.png"), size=(20, 20))
+except FileNotFoundError:
+    img = None
 img_cover_folder = r'static'
+
 
 class MainWindow(customtkinter.CTk):
     def __init__(self, *args, **kwargs):
@@ -28,7 +37,6 @@ class MainWindow(customtkinter.CTk):
         self.geometry(f"{appWidth}x{appHeight}")
         self.resizable(0, 0)
         self.frame = customtkinter.CTkFrame(self, width=appWidth-1, height=appHeight-1, border_width=1).grid(row=0, column=0, padx=1, pady=1)
-
 
         self.new_link_label = customtkinter.CTkLabel(self, text="Add new manga", fg_color=("#dbdbdb", "#2b2b2b"))
         self.new_link_label.grid(row=0, column=0, columnspan=1, padx=145, pady=20, sticky="sw")
@@ -43,9 +51,9 @@ class MainWindow(customtkinter.CTk):
         self.add_button.grid(row=0, column=0, columnspan=1, padx=10, pady=17, sticky="se")
 
         self.run_scraping_label = customtkinter.CTkLabel(self, text="Run scraping", fg_color=("#dbdbdb", "#2b2b2b"))
-        self.run_scraping_label.grid(row=0, column=0, columnspan=1, padx=2, pady=10, sticky="n")
+        self.run_scraping_label.grid(row=0, column=0, columnspan=1, padx=200, pady=13, sticky="n")
         self.run_scraping_button = customtkinter.CTkButton(self, image=img, text='SCRAP CHAPTERS', fg_color="#80669d", text_color="white", hover_color="#a881af", width=75, height=35, border_width=1, command=self.scrap_chapters)
-        self.run_scraping_button.grid(row=0, column=0, columnspan=1, padx=2, pady=40, sticky="n")
+        self.run_scraping_button.grid(row=0, column=0, columnspan=1, padx=200, pady=41, sticky="n")
         self.count_label = customtkinter.CTkLabel(self, text=f"Mangas in \ndatabase: {row_count}", fg_color=("#dbdbdb", "#2b2b2b"))
         self.count_label.grid(row=0, column=0, columnspan=1, padx=8, pady=15, sticky="sw")
 
@@ -70,14 +78,19 @@ class MainWindow(customtkinter.CTk):
         self.open_url_button = customtkinter.CTkButton(self, text='Show all mangas', fg_color="#80669d", text_color="white", hover_color="#a881af", width=60, height=30, border_width=1, command=self.treeview)
         self.open_url_button.grid(row=0, column=0, columnspan=1, padx=50, pady=15, sticky="ne")
 
-        self.image1 = resource_path(fr'static/manga.png')
-        self.imga = ImageTk.PhotoImage(Image.open(self.image1))
-        self.img_label = customtkinter.CTkLabel(self, image=self.imga, text='')
-        self.img_label.grid(row=0, column=0, columnspan=1, padx=20, pady=150, sticky="nw")
+        try:
+            self.image1 = resource_path(fr'static/manga.png')
+            self.imga = ImageTk.PhotoImage(Image.open(self.image1))
+            self.img_label = customtkinter.CTkLabel(self, image=self.imga, text='')
+            self.img_label.grid(row=0, column=0, columnspan=1, padx=20, pady=150, sticky="nw")
+        except FileNotFoundError:
+            pass
         self.chapter_tree.bind("<<TreeviewSelect>>", self.on_treeview_select)
 
         self.chapter_tree.tag_configure("red_tag", foreground="#E2A8F5")
         self.chapter_tree.tag_configure("yellow_tag", foreground="#F5F5CF")
+
+        self.thread = None  # Store the previous thread object from scrap latest chapter
 
     def add_link(self):
         link = self.add_new_link.get()
@@ -141,6 +154,17 @@ class MainWindow(customtkinter.CTk):
 
     def close(self):
         self.destroy()
+        # Close all python processes
+        all_processes = psutil.process_iter()
+        for process in all_processes:
+            try:
+                process_info = process.as_dict(attrs=['pid', 'name'])
+                # Check if the process is a Python process
+                if 'python' in process_info['name'].lower():
+                    # Terminate the process
+                    process.kill()
+            except psutil.NoSuchProcess:
+                pass
 
     def treeview(self):
         mysql_df = "SELECT * FROM chapter_list"
@@ -167,6 +191,8 @@ class MainWindow(customtkinter.CTk):
 
         df2 = df.to_numpy().tolist()
         for row in df2:
+            if row[4] == None:
+                row[4] = 0
             days_ago_value = float(row[4])
             values = tuple(row)
             item_id = self.chapter_tree.insert("", "end", values=values)
@@ -202,6 +228,13 @@ class MainWindow(customtkinter.CTk):
         self.open_url_button = customtkinter.CTkButton(self, text='Open selected url', fg_color="#80669d", text_color="white", hover_color="#a881af", width=60, height=30, border_width=1, command=self.open_selected_url)
         self.open_url_button.grid(row=0, column=0, columnspan=1, padx=50, pady=52, sticky="ne")
 
+        self.open_url_button = customtkinter.CTkButton(self, text='Read Latest Chapter', fg_color="#80669d", text_color="white", hover_color="#a881af", width=60, height=30, border_width=1, command=self.open_latest_chapter)
+        self.open_url_button.grid(row=0, column=0, columnspan=1, padx=65, pady=15, sticky="nw")
+        self.open_url_button = customtkinter.CTkButton(self, text='Scrap All Chapters', fg_color="#80669d", text_color="white", hover_color="#a881af", width=60, height=30, border_width=1, command=self.scrap_all_manga)
+        self.open_url_button.grid(row=0, column=0, columnspan=1, padx=11, pady=75, sticky="nw")
+        self.open_url_button = customtkinter.CTkButton(self, text='Read Scrapped', fg_color="#80669d", text_color="white", hover_color="#a881af", width=60, height=30, border_width=1, command=self.read_all)
+        self.open_url_button.grid(row=0, column=0, columnspan=1, padx=135, pady=75, sticky="nw")
+
     def open_selected_url(self):
         columns = ['Title', 'Web_link', 'Latest Chapter', 'Upload Date', 'Days Ago']
 
@@ -217,9 +250,12 @@ class MainWindow(customtkinter.CTk):
                 webbrowser.open(url)
 
     def on_treeview_select(self, event):
-        self.image1 = resource_path(fr'static/manga.png')
-        self.imga = ImageTk.PhotoImage(Image.open(self.image1))
-        self.img_label.configure(self, image=self.imga)
+        try:
+            self.image1 = resource_path(fr'static/manga.png')
+            self.imga = ImageTk.PhotoImage(Image.open(self.image1))
+            self.img_label.configure(self, image=self.imga)
+        except FileNotFoundError:
+            pass
 
         columns = ['Title', 'Web_link', 'Latest Chapter', 'Upload Date', 'Days Ago']
         # Get the selected item
@@ -237,6 +273,35 @@ class MainWindow(customtkinter.CTk):
                 self.imga = ImageTk.PhotoImage(Image.open(self.image1))
                 self.img_label = customtkinter.CTkLabel(self, image=self.imga, text='')
                 self.img_label.grid(row=0, column=0, columnspan=1, padx=10, pady=150, sticky="nw")
+
+    def open_latest_chapter(self):
+        columns = ['Title', 'Web_link', 'Latest Chapter', 'Upload Date', 'Days Ago']
+        selected_item = self.chapter_tree.selection()
+        if selected_item:
+            url_column_index = columns.index('Web_link')
+            url = self.chapter_tree.item(selected_item, 'values')[url_column_index]
+
+            self.thread = threading.Thread(target=scrap_latest, args=(url,))
+            self.thread.start()
+
+    def scrap_all_manga(self):
+        columns = ['Title', 'Web_link', 'Latest Chapter', 'Upload Date', 'Days Ago']
+        selected_item = self.chapter_tree.selection()
+        if selected_item:
+            url_column_index = columns.index('Web_link')
+            url = self.chapter_tree.item(selected_item, 'values')[url_column_index]
+            scrap_all(url)
+
+    def read_all(self):
+        columns = ['Title', 'Web_link', 'Latest Chapter', 'Upload Date', 'Days Ago']
+        selected_item = self.chapter_tree.selection()
+        if selected_item:
+            url_column_index = columns.index('Web_link')
+            url = self.chapter_tree.item(selected_item, 'values')[url_column_index]
+
+            self.thread = threading.Thread(target=read_all_chapters, args=(url,))
+            self.thread.start()
+
 
 if __name__ == "__main__":
     app = MainWindow()
